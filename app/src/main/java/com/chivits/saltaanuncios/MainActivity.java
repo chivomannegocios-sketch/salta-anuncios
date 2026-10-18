@@ -21,8 +21,8 @@ import android.widget.TextView;
 
 public class MainActivity extends Activity {
 
-    private TextView estado, estadoCamara;
-    private Button botonCamara;
+    private TextView estado, estadoCamara, estadoVoz;
+    private Button botonCamara, botonVoz;
     private SharedPreferences sp;
 
     @Override
@@ -105,6 +105,36 @@ public class MainActivity extends Activity {
         });
         caja.addView(inv);
 
+        // ---------- Parte 3: voz ----------
+        caja.addView(texto("\n3) Control de scroll con la voz", 20, Color.BLACK));
+        estadoVoz = texto("", 18, Color.BLACK);
+        caja.addView(estadoVoz);
+        caja.addView(texto(
+                "Toca \"Iniciar\", abre TikTok y di en voz clara:\n"
+                + "• \"uno\" → siguiente video.\n"
+                + "• \"dos\" → video anterior.\n"
+                + "Usa el reconocimiento de voz de Google, así que necesita internet o el paquete de voz en español descargado (Ajustes > Idiomas > Voz). En algunos celulares se oye un pitido al escuchar.",
+                15, Color.DKGRAY));
+        botonVoz = new Button(this);
+        botonVoz.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                alternarVoz();
+            }
+        });
+        caja.addView(botonVoz);
+
+        CheckBox invVoz = new CheckBox(this);
+        invVoz.setText("Invertir voz (uno = video anterior, dos = siguiente)");
+        invVoz.setChecked(sp.getBoolean("invertir_voz", false));
+        invVoz.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton c, boolean marcado) {
+                sp.edit().putBoolean("invertir_voz", marcado).apply();
+            }
+        });
+        caja.addView(invVoz);
+
         ScrollView sv = new ScrollView(this);
         sv.addView(caja);
         setContentView(sv);
@@ -135,11 +165,31 @@ public class MainActivity extends Activity {
             }
             return;
         }
-        iniciarCamara();
+        iniciarServicio(CamaraService.class);
     }
 
-    private void iniciarCamara() {
-        Intent i = new Intent(this, CamaraService.class);
+    private void alternarVoz() {
+        if (VozService.corriendo) {
+            stopService(new Intent(this, VozService.class));
+            VozService.corriendo = false;
+            actualizar();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            if (Build.VERSION.SDK_INT >= 33) {
+                requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO,
+                        Manifest.permission.POST_NOTIFICATIONS}, 2);
+            } else {
+                requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 2);
+            }
+            return;
+        }
+        iniciarServicio(VozService.class);
+    }
+
+    private void iniciarServicio(Class<?> clase) {
+        Intent i = new Intent(this, clase);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
         else startService(i);
         botonCamara.postDelayed(new Runnable() {
@@ -153,10 +203,18 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int code, String[] permisos, int[] res) {
         super.onRequestPermissionsResult(code, permisos, res);
-        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            iniciarCamara();
-        } else {
-            estadoCamara.setText("❌ Sin permiso de cámara");
+        if (code == 1) {
+            if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                iniciarServicio(CamaraService.class);
+            } else {
+                estadoCamara.setText("❌ Sin permiso de cámara");
+            }
+        } else if (code == 2) {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                iniciarServicio(VozService.class);
+            } else {
+                estadoVoz.setText("❌ Sin permiso de micrófono");
+            }
         }
     }
 
@@ -184,6 +242,20 @@ public class MainActivity extends Activity {
             estadoCamara.setText("⏸ Cámara detenida (gestos detectados: " + g + ")");
             estadoCamara.setTextColor(Color.rgb(176, 0, 32));
             botonCamara.setText("Iniciar control por cámara");
+        }
+        actualizarVoz();
+    }
+
+    private void actualizarVoz() {
+        int v = sp.getInt("voz", 0);
+        if (VozService.corriendo) {
+            estadoVoz.setText("✅ Voz activa — órdenes detectadas: " + v);
+            estadoVoz.setTextColor(Color.rgb(0, 128, 0));
+            botonVoz.setText("Detener control por voz");
+        } else {
+            estadoVoz.setText("⏸ Voz detenida (órdenes detectadas: " + v + ")");
+            estadoVoz.setTextColor(Color.rgb(176, 0, 32));
+            botonVoz.setText("Iniciar control por voz");
         }
     }
 
