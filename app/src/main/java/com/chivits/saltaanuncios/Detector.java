@@ -25,6 +25,12 @@ public class Detector {
         this.orient = orient;
     }
 
+    /** Olvida lo anterior (por ejemplo, cuando se vuelve a entrar a TikTok). */
+    public void reiniciar() {
+        previo = null;
+        n = 0;
+    }
+
     /** Devuelve -1 si la mano subió, 1 si bajó, 0 si no hubo gesto. */
     public int alimentar(byte[] g, long t) {
         if (previo == null) {

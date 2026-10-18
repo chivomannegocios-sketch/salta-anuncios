@@ -187,6 +187,10 @@ public class CamaraService extends Service {
         Image im = r.acquireLatestImage();
         if (im == null) return;
         try {
+            if (!SaltaService.enTikTok()) {
+                detector.reiniciar();
+                return; // fuera de TikTok no se analiza nada
+            }
             long ahora = System.currentTimeMillis();
             if (ahora - ultimosAjustes > 1000) {
                 ultimosAjustes = ahora;

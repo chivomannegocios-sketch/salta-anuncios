@@ -79,6 +79,16 @@ public class VozService extends Service {
 
     private void escuchar() {
         if (!corriendo) return;
+        if (!SaltaService.enTikTok()) {
+            // fuera de TikTok no se escucha: se vuelve a mirar en 1 segundo
+            main.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    escuchar();
+                }
+            }, 1000);
+            return;
+        }
         disparado = false;
         try {
             if (sr == null) {

@@ -7,9 +7,11 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -18,18 +20,31 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import android.widget.Toast;
 
 public class MainActivity extends Activity {
 
-    private TextView estado, estadoCamara, estadoVoz;
-    private Button botonCamara, botonVoz;
+    private static final int VERDE = Color.rgb(46, 125, 50);
+    private static final int GRIS = Color.rgb(150, 150, 150);
+
     private SharedPreferences sp;
+    private float d;
+    private TextView estadoAcc;
+
+    /** Una fila con un círculo (vacío = apagado, verde = encendido) y su texto. */
+    private static class Fila {
+        View circulo;
+        TextView titulo, detalle;
+    }
+
+    private Fila filaAnuncios, filaCamara, filaVoz, filaBloqueo;
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         sp = getSharedPreferences("stats", Context.MODE_PRIVATE);
-        int pad = (int) (24 * getResources().getDisplayMetrics().density);
+        d = getResources().getDisplayMetrics().density;
+        int pad = (int) (20 * d);
 
         LinearLayout caja = new LinearLayout(this);
         caja.setOrientation(LinearLayout.VERTICAL);
@@ -37,15 +52,12 @@ public class MainActivity extends Activity {
 
         caja.addView(texto("Salta Anuncios y Scroll", 28, Color.BLACK));
 
-        // ---------- Parte 1: accesibilidad ----------
-        caja.addView(texto("\n1) Permiso de accesibilidad (obligatorio)", 20, Color.BLACK));
-        estado = texto("", 18, Color.BLACK);
-        caja.addView(estado);
-        caja.addView(texto(
-                "Sirve para pulsar \"Omitir anuncio\" en YouTube y para deslizar la pantalla.\n"
-                + "• Toca el botón, entra a \"Salta Anuncios y Scroll\" y activa el interruptor.\n"
-                + "• Si no te deja (Android 13 o más): Ajustes > Apps > Salta Anuncios y Scroll > menú de 3 puntos > \"Permitir ajustes restringidos\"; luego vuelve a intentar.",
-                15, Color.DKGRAY));
+        // ---------- Permiso de accesibilidad ----------
+        caja.addView(texto("\nPermiso de accesibilidad (obligatorio)", 18, Color.BLACK));
+        estadoAcc = texto("", 16, Color.BLACK);
+        caja.addView(estadoAcc);
+        caja.addView(texto("Sin este permiso nada funciona. Si sale opaco: Ajustes > Apps > Salta Anuncios y Scroll > ⋮ > \"Permitir ajustes restringidos\".",
+                14, Color.DKGRAY));
         Button abrir = new Button(this);
         abrir.setText("Abrir ajustes de accesibilidad");
         abrir.setOnClickListener(new View.OnClickListener() {
@@ -56,27 +68,26 @@ public class MainActivity extends Activity {
         });
         caja.addView(abrir);
 
-        // ---------- Parte 2: cámara ----------
-        caja.addView(texto("\n2) Control de scroll con la cámara", 20, Color.BLACK));
-        estadoCamara = texto("", 18, Color.BLACK);
-        caja.addView(estadoCamara);
-        caja.addView(texto(
-                "Pasos: toca \"Iniciar\", abre TikTok, y mueve la mano o el dedo hacia ARRIBA o hacia ABAJO frente a la cámara delantera (a 20-30 cm), con un movimiento claro y el resto quieto.\n"
-                + "• Mano sube → pasa al siguiente video.\n"
-                + "• Mano baja → vuelve al anterior.\n"
-                + "Detecta movimiento, no sabe si es un dedo. Si alguien se mueve detrás o hay cambios de luz, puede equivocarse.",
-                15, Color.DKGRAY));
+        // ---------- Funciones ----------
+        caja.addView(texto("\nFunciones (toca para activar o desactivar)", 18, Color.BLACK));
 
-        botonCamara = new Button(this);
-        botonCamara.setOnClickListener(new View.OnClickListener() {
+        filaAnuncios = fila(caja, "Saltar anuncios en YouTube", new Runnable() {
             @Override
-            public void onClick(View v) {
+            public void run() {
+                sp.edit().putBoolean("anuncios_on", !sp.getBoolean("anuncios_on", true)).apply();
+                actualizar();
+            }
+        });
+
+        filaCamara = fila(caja, "Scroll con la cámara (solo en TikTok)", new Runnable() {
+            @Override
+            public void run() {
                 alternarCamara();
             }
         });
-        caja.addView(botonCamara);
-
-        caja.addView(texto("\nSensibilidad (más a la derecha = detecta movimientos más cortos)", 15, Color.DKGRAY));
+        caja.addView(texto("Mueve la mano hacia arriba (siguiente video) o hacia abajo (anterior) frente a la cámara delantera, a 20-30 cm.",
+                13, Color.DKGRAY));
+        caja.addView(texto("Sensibilidad (más a la derecha = detecta movimientos más cortos)", 13, Color.DKGRAY));
         SeekBar barra = new SeekBar(this);
         barra.setMax(100);
         barra.setProgress(sp.getInt("sensibilidad", 50));
@@ -93,59 +104,125 @@ public class MainActivity extends Activity {
             public void onStopTrackingTouch(SeekBar s) { }
         });
         caja.addView(barra);
+        caja.addView(casilla("Invertir dirección de la cámara", "invertir"));
 
-        CheckBox inv = new CheckBox(this);
-        inv.setText("Invertir dirección (mano sube = video anterior)");
-        inv.setChecked(sp.getBoolean("invertir", false));
-        inv.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+        filaVoz = fila(caja, "Scroll con la voz (solo en TikTok)", new Runnable() {
             @Override
-            public void onCheckedChanged(CompoundButton c, boolean marcado) {
-                sp.edit().putBoolean("invertir", marcado).apply();
-            }
-        });
-        caja.addView(inv);
-
-        // ---------- Parte 3: voz ----------
-        caja.addView(texto("\n3) Control de scroll con la voz", 20, Color.BLACK));
-        estadoVoz = texto("", 18, Color.BLACK);
-        caja.addView(estadoVoz);
-        caja.addView(texto(
-                "Toca \"Iniciar\", abre TikTok y di en voz clara:\n"
-                + "• \"uno\" → siguiente video.\n"
-                + "• \"dos\" → video anterior.\n"
-                + "Usa el reconocimiento de voz de Google, así que necesita internet o el paquete de voz en español descargado (Ajustes > Idiomas > Voz). En algunos celulares se oye un pitido al escuchar.",
-                15, Color.DKGRAY));
-        botonVoz = new Button(this);
-        botonVoz.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
+            public void run() {
                 alternarVoz();
             }
         });
-        caja.addView(botonVoz);
+        caja.addView(texto("Di \"uno\" (siguiente video) o \"dos\" (anterior). Usa la voz de Google; en algunos celulares suena un pitido.",
+                13, Color.DKGRAY));
+        caja.addView(casilla("Invertir voz (uno = anterior, dos = siguiente)", "invertir_voz"));
 
-        CheckBox invVoz = new CheckBox(this);
-        invVoz.setText("Invertir voz (uno = video anterior, dos = siguiente)");
-        invVoz.setChecked(sp.getBoolean("invertir_voz", false));
-        invVoz.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+        filaBloqueo = fila(caja, "Botón flotante para apagar la pantalla", new Runnable() {
             @Override
-            public void onCheckedChanged(CompoundButton c, boolean marcado) {
-                sp.edit().putBoolean("invertir_voz", marcado).apply();
+            public void run() {
+                alternarBloqueo();
             }
         });
-        caja.addView(invVoz);
+        caja.addView(texto("Aparece un círculo con candado encima de todas las apps (arrástralo para moverlo). Al tocarlo, la pantalla se pone negra con el brillo al mínimo y el táctil se bloquea, pero la app de abajo SIGUE funcionando (el video sigue sonando, la voz sigue escuchando).\n"
+                + "Para volver: aprieta el botón de encendido.\n"
+                + "Salida de emergencia: toca la pantalla 5 veces rápido.",
+                13, Color.DKGRAY));
+        caja.addView(casilla("Usar bloqueo real del sistema (apaga de verdad, pero pausa los videos; Android 9+)", "bloqueo_real"));
+
+        Button probar = new Button(this);
+        probar.setText("Probar: apagar pantalla ahora");
+        probar.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                SaltaService s = SaltaService.instancia;
+                if (s == null) avisoAccesibilidad();
+                else s.accionBloqueo();
+            }
+        });
+        caja.addView(probar);
 
         ScrollView sv = new ScrollView(this);
         sv.addView(caja);
         setContentView(sv);
     }
 
-    private TextView texto(String t, int sp_, int color) {
+    // ---------- piezas de la interfaz ----------
+
+    private TextView texto(String t, int tam, int color) {
         TextView tv = new TextView(this);
         tv.setText(t);
-        tv.setTextSize(sp_);
+        tv.setTextSize(tam);
         tv.setTextColor(color);
         return tv;
+    }
+
+    private CheckBox casilla(String t, final String clave) {
+        CheckBox c = new CheckBox(this);
+        c.setText(t);
+        c.setChecked(sp.getBoolean(clave, false));
+        c.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean marcado) {
+                sp.edit().putBoolean(clave, marcado).apply();
+            }
+        });
+        return c;
+    }
+
+    private Fila fila(LinearLayout padre, String titulo, final Runnable accion) {
+        Fila f = new Fila();
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, (int) (14 * d), 0, (int) (6 * d));
+
+        f.circulo = new View(this);
+        int tam = (int) (34 * d);
+        LinearLayout.LayoutParams lc = new LinearLayout.LayoutParams(tam, tam);
+        lc.rightMargin = (int) (14 * d);
+        row.addView(f.circulo, lc);
+
+        LinearLayout textos = new LinearLayout(this);
+        textos.setOrientation(LinearLayout.VERTICAL);
+        f.titulo = texto(titulo, 17, Color.BLACK);
+        f.detalle = texto("", 13, GRIS);
+        textos.addView(f.titulo);
+        textos.addView(f.detalle);
+        row.addView(textos, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        row.setClickable(true);
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                accion.run();
+            }
+        });
+        padre.addView(row);
+        return f;
+    }
+
+    private void pintar(Fila f, boolean on, String detalle) {
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setStroke((int) (3 * d), on ? VERDE : GRIS);
+        g.setColor(on ? VERDE : Color.TRANSPARENT);
+        f.circulo.setBackground(g);
+        f.detalle.setText((on ? "Activado" : "Desactivado") + (detalle.isEmpty() ? "" : " · " + detalle));
+        f.detalle.setTextColor(on ? VERDE : GRIS);
+    }
+
+    // ---------- acciones ----------
+
+    private void avisoAccesibilidad() {
+        Toast.makeText(this, "Primero activa el permiso de accesibilidad", Toast.LENGTH_LONG).show();
+    }
+
+    private void alternarBloqueo() {
+        boolean nuevo = !sp.getBoolean("flotante_on", false);
+        sp.edit().putBoolean("flotante_on", nuevo).apply();
+        SaltaService s = SaltaService.instancia;
+        if (s != null) s.actualizarFlotante();
+        else if (nuevo) avisoAccesibilidad();
+        actualizar();
     }
 
     private void alternarCamara() {
@@ -155,6 +232,7 @@ public class MainActivity extends Activity {
             actualizar();
             return;
         }
+        if (SaltaService.instancia == null) avisoAccesibilidad();
         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.CAMERA)
                 != PackageManager.PERMISSION_GRANTED) {
             if (Build.VERSION.SDK_INT >= 33) {
@@ -175,6 +253,7 @@ public class MainActivity extends Activity {
             actualizar();
             return;
         }
+        if (SaltaService.instancia == null) avisoAccesibilidad();
         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
             if (Build.VERSION.SDK_INT >= 33) {
@@ -192,7 +271,7 @@ public class MainActivity extends Activity {
         Intent i = new Intent(this, clase);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
         else startService(i);
-        botonCamara.postDelayed(new Runnable() {
+        estadoAcc.postDelayed(new Runnable() {
             @Override
             public void run() {
                 actualizar();
@@ -207,13 +286,13 @@ public class MainActivity extends Activity {
             if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                 iniciarServicio(CamaraService.class);
             } else {
-                estadoCamara.setText("❌ Sin permiso de cámara");
+                Toast.makeText(this, "Sin permiso de cámara", Toast.LENGTH_LONG).show();
             }
         } else if (code == 2) {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                 iniciarServicio(VozService.class);
             } else {
-                estadoVoz.setText("❌ Sin permiso de micrófono");
+                Toast.makeText(this, "Sin permiso de micrófono", Toast.LENGTH_LONG).show();
             }
         }
     }
@@ -221,42 +300,21 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        SaltaService s = SaltaService.instancia;
+        if (s != null) s.actualizarFlotante();
         actualizar();
     }
 
     private void actualizar() {
-        int n = sp.getInt("omitidos", 0);
-        if (servicioActivo()) {
-            estado.setText("✅ Activado — anuncios omitidos: " + n);
-            estado.setTextColor(Color.rgb(0, 128, 0));
-        } else {
-            estado.setText("❌ Desactivado (anuncios omitidos hasta ahora: " + n + ")");
-            estado.setTextColor(Color.rgb(176, 0, 32));
-        }
-        int g = sp.getInt("gestos", 0);
-        if (CamaraService.corriendo) {
-            estadoCamara.setText("✅ Cámara activa — gestos detectados: " + g);
-            estadoCamara.setTextColor(Color.rgb(0, 128, 0));
-            botonCamara.setText("Detener control por cámara");
-        } else {
-            estadoCamara.setText("⏸ Cámara detenida (gestos detectados: " + g + ")");
-            estadoCamara.setTextColor(Color.rgb(176, 0, 32));
-            botonCamara.setText("Iniciar control por cámara");
-        }
-        actualizarVoz();
-    }
+        boolean acc = servicioActivo();
+        estadoAcc.setText(acc ? "✅ Activado" : "❌ Desactivado: toca el botón y actívalo");
+        estadoAcc.setTextColor(acc ? VERDE : Color.rgb(176, 0, 32));
 
-    private void actualizarVoz() {
-        int v = sp.getInt("voz", 0);
-        if (VozService.corriendo) {
-            estadoVoz.setText("✅ Voz activa — órdenes detectadas: " + v);
-            estadoVoz.setTextColor(Color.rgb(0, 128, 0));
-            botonVoz.setText("Detener control por voz");
-        } else {
-            estadoVoz.setText("⏸ Voz detenida (órdenes detectadas: " + v + ")");
-            estadoVoz.setTextColor(Color.rgb(176, 0, 32));
-            botonVoz.setText("Iniciar control por voz");
-        }
+        pintar(filaAnuncios, sp.getBoolean("anuncios_on", true),
+                "omitidos: " + sp.getInt("omitidos", 0));
+        pintar(filaCamara, CamaraService.corriendo, "gestos: " + sp.getInt("gestos", 0));
+        pintar(filaVoz, VozService.corriendo, "órdenes: " + sp.getInt("voz", 0));
+        pintar(filaBloqueo, sp.getBoolean("flotante_on", false), "");
     }
 
     private boolean servicioActivo() {
