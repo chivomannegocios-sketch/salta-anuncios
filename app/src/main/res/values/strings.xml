@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Salta Anuncios y Scroll</string>
+    <string name="descripcion">Pulsa el botón \"Omitir anuncio\" de YouTube y, si activas el control por cámara, desliza la pantalla cuando mueves la mano. No lee ni guarda nada más.</string>
+</resources>
