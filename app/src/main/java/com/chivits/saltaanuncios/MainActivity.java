@@ -7,13 +7,16 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
-import android.widget.Button;
+import android.view.Window;
 import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.LinearLayout;
@@ -22,56 +25,103 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+/** Pantalla principal: tema oscuro con tarjetas y círculos (vacío = apagado, verde = encendido). */
 public class MainActivity extends Activity {
 
-    private static final int VERDE = Color.rgb(46, 125, 50);
-    private static final int GRIS = Color.rgb(150, 150, 150);
+    // colores
+    private static final int FONDO = Color.rgb(13, 15, 20);
+    private static final int TARJETA = Color.rgb(24, 27, 34);
+    private static final int BORDE = Color.rgb(40, 44, 54);
+    private static final int VERDE = Color.rgb(52, 199, 89);
+    private static final int ROJO = Color.rgb(255, 82, 82);
+    private static final int BLANCO = Color.rgb(240, 242, 245);
+    private static final int GRIS = Color.rgb(150, 156, 168);
+    private static final int AZUL = Color.rgb(64, 156, 255);
 
     private SharedPreferences sp;
     private float d;
-    private TextView estadoAcc;
+    private final Handler h = new Handler(Looper.getMainLooper());
 
-    /** Una fila con un círculo (vacío = apagado, verde = encendido) y su texto. */
+    private TextView estadoAcc, botonAcc;
+    private LinearLayout tarjetaAcc;
+    private TextView statAnuncios, statGestos, statVoz, statTiempo;
+    private TextView textoDormir, textoAuto, textoDescanso;
+
     private static class Fila {
         View circulo;
-        TextView titulo, detalle;
+        TextView detalle;
     }
 
-    private Fila filaAnuncios, filaCamara, filaVoz, filaBloqueo;
+    private Fila fAnuncios, fCamara, fVoz, fAuto, fFlotante, fDescanso;
+
+    private final Runnable refresco = new Runnable() {
+        @Override
+        public void run() {
+            actualizar();
+            h.postDelayed(this, 1000);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         sp = getSharedPreferences("stats", Context.MODE_PRIVATE);
         d = getResources().getDisplayMetrics().density;
-        int pad = (int) (20 * d);
+
+        Window w = getWindow();
+        w.setStatusBarColor(FONDO);
+        w.setNavigationBarColor(FONDO);
 
         LinearLayout caja = new LinearLayout(this);
         caja.setOrientation(LinearLayout.VERTICAL);
-        caja.setPadding(pad, pad * 2, pad, pad);
+        caja.setPadding(dp(16), dp(28), dp(16), dp(32));
+        caja.setBackgroundColor(FONDO);
 
-        caja.addView(texto("Salta Anuncios y Scroll", 28, Color.BLACK));
+        // ---------- cabecera ----------
+        TextView titulo = texto("Salta Anuncios y Scroll", 26, BLANCO);
+        titulo.setTypeface(Typeface.DEFAULT_BOLD);
+        caja.addView(titulo);
+        caja.addView(texto("Tu asistente para YouTube y TikTok", 14, GRIS));
+        espacio(caja, 16);
 
-        // ---------- Permiso de accesibilidad ----------
-        caja.addView(texto("\nPermiso de accesibilidad (obligatorio)", 18, Color.BLACK));
-        estadoAcc = texto("", 16, Color.BLACK);
-        caja.addView(estadoAcc);
-        caja.addView(texto("Sin este permiso nada funciona. Si sale opaco: Ajustes > Apps > Salta Anuncios y Scroll > ⋮ > \"Permitir ajustes restringidos\".",
-                14, Color.DKGRAY));
-        Button abrir = new Button(this);
-        abrir.setText("Abrir ajustes de accesibilidad");
-        abrir.setOnClickListener(new View.OnClickListener() {
+        // ---------- accesibilidad ----------
+        tarjetaAcc = tarjeta(caja);
+        LinearLayout filaAcc = new LinearLayout(this);
+        filaAcc.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout tAcc = new LinearLayout(this);
+        tAcc.setOrientation(LinearLayout.VERTICAL);
+        TextView tit = texto("Permiso de accesibilidad", 16, BLANCO);
+        tit.setTypeface(Typeface.DEFAULT_BOLD);
+        tAcc.addView(tit);
+        estadoAcc = texto("", 13, GRIS);
+        tAcc.addView(estadoAcc);
+        filaAcc.addView(tAcc, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        botonAcc = boton("Activar", VERDE, new Runnable() {
             @Override
-            public void onClick(View v) {
+            public void run() {
                 startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             }
         });
-        caja.addView(abrir);
+        filaAcc.addView(botonAcc);
+        tarjetaAcc.addView(filaAcc);
+        tarjetaAcc.addView(nota("Si sale opaco: Ajustes > Apps > Salta Anuncios y Scroll > ⋮ > \"Permitir ajustes restringidos\"."));
 
-        // ---------- Funciones ----------
-        caja.addView(texto("\nFunciones (toca para activar o desactivar)", 18, Color.BLACK));
+        // ---------- estadísticas ----------
+        LinearLayout stats = tarjeta(caja);
+        stats.addView(subtitulo("📊  Resumen"));
+        LinearLayout g1 = new LinearLayout(this);
+        LinearLayout g2 = new LinearLayout(this);
+        statAnuncios = stat(g1, "Anuncios omitidos");
+        statTiempo = stat(g1, "En TikTok hoy");
+        statGestos = stat(g2, "Gestos de cámara");
+        statVoz = stat(g2, "Órdenes de voz");
+        stats.addView(g1);
+        stats.addView(g2);
 
-        filaAnuncios = fila(caja, "Saltar anuncios en YouTube", new Runnable() {
+        // ---------- YouTube ----------
+        LinearLayout yt = tarjeta(caja);
+        yt.addView(subtitulo("▶️  YouTube"));
+        fAnuncios = fila(yt, "Saltar anuncios", "Pulsa \"Omitir anuncio\" en cuanto aparece.", new Runnable() {
             @Override
             public void run() {
                 sp.edit().putBoolean("anuncios_on", !sp.getBoolean("anuncios_on", true)).apply();
@@ -79,73 +129,139 @@ public class MainActivity extends Activity {
             }
         });
 
-        filaCamara = fila(caja, "Scroll con la cámara (solo en TikTok)", new Runnable() {
+        // ---------- TikTok ----------
+        LinearLayout tk = tarjeta(caja);
+        tk.addView(subtitulo("🎵  TikTok (solo funciona con TikTok abierto)"));
+
+        fCamara = fila(tk, "Scroll con la cámara", "Mano arriba = siguiente · mano abajo = anterior.", new Runnable() {
             @Override
             public void run() {
                 alternarCamara();
             }
         });
-        caja.addView(texto("Mueve la mano hacia arriba (siguiente video) o hacia abajo (anterior) frente a la cámara delantera, a 20-30 cm.",
-                13, Color.DKGRAY));
-        caja.addView(texto("Sensibilidad (más a la derecha = detecta movimientos más cortos)", 13, Color.DKGRAY));
-        SeekBar barra = new SeekBar(this);
-        barra.setMax(100);
-        barra.setProgress(sp.getInt("sensibilidad", 50));
-        barra.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar s, int p, boolean user) {
-                sp.edit().putInt("sensibilidad", p).apply();
-            }
+        tk.addView(nota("Sensibilidad (derecha = movimientos más cortos)"));
+        tk.addView(barra("sensibilidad", 50, 100, null));
+        tk.addView(casilla("Invertir dirección", "invertir"));
+        separador(tk);
 
-            @Override
-            public void onStartTrackingTouch(SeekBar s) { }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar s) { }
-        });
-        caja.addView(barra);
-        caja.addView(casilla("Invertir dirección de la cámara", "invertir"));
-
-        filaVoz = fila(caja, "Scroll con la voz (solo en TikTok)", new Runnable() {
+        fVoz = fila(tk, "Control por voz", "Habla claro cerca del celular.", new Runnable() {
             @Override
             public void run() {
                 alternarVoz();
             }
         });
-        caja.addView(texto("Di \"uno\" (siguiente video) o \"dos\" (anterior). Usa la voz de Google; en algunos celulares suena un pitido.",
-                13, Color.DKGRAY));
-        caja.addView(casilla("Invertir voz (uno = anterior, dos = siguiente)", "invertir_voz"));
+        tk.addView(nota("Comandos:  \"uno\" → siguiente  ·  \"dos\" → anterior  ·  \"me gusta\" → ❤️  ·  \"pausa\" → pausar/seguir  ·  \"apagar\" → pantalla negra"));
+        tk.addView(casilla("Invertir uno / dos", "invertir_voz"));
+        separador(tk);
 
-        filaBloqueo = fila(caja, "Botón flotante para apagar la pantalla", new Runnable() {
+        fAuto = fila(tk, "Auto-scroll", "Pasa al siguiente video solo, cada cierto tiempo.", new Runnable() {
             @Override
             public void run() {
-                alternarBloqueo();
+                sp.edit().putBoolean("auto_on", !sp.getBoolean("auto_on", false)).apply();
+                if (SaltaService.instancia == null) avisoAccesibilidad();
+                actualizar();
             }
         });
-        caja.addView(texto("Aparece un círculo con candado encima de todas las apps (arrástralo para moverlo). Al tocarlo, la pantalla se pone negra con el brillo al mínimo y el táctil se bloquea, pero la app de abajo SIGUE funcionando (el video sigue sonando, la voz sigue escuchando).\n"
-                + "Para volver: aprieta el botón de encendido.\n"
-                + "Salida de emergencia: toca la pantalla 5 veces rápido.",
-                13, Color.DKGRAY));
-        caja.addView(casilla("Usar bloqueo real del sistema (apaga de verdad, pero pausa los videos; Android 9+)", "bloqueo_real"));
-
-        Button probar = new Button(this);
-        probar.setText("Probar: apagar pantalla ahora");
-        probar.setOnClickListener(new View.OnClickListener() {
+        textoAuto = nota("");
+        tk.addView(textoAuto);
+        tk.addView(barra("auto_seg", 15, 60, new Runnable() {
             @Override
-            public void onClick(View v) {
+            public void run() {
+                if (sp.getInt("auto_seg", 15) < 3) sp.edit().putInt("auto_seg", 3).apply();
+            }
+        }));
+
+        // ---------- Pantalla ----------
+        LinearLayout pant = tarjeta(caja);
+        pant.addView(subtitulo("🌙  Pantalla y batería"));
+        fFlotante = fila(pant, "Botón flotante para apagar", "Un círculo con luna sobre todas las apps.", new Runnable() {
+            @Override
+            public void run() {
+                boolean nuevo = !sp.getBoolean("flotante_on", false);
+                sp.edit().putBoolean("flotante_on", nuevo).apply();
+                SaltaService s = SaltaService.instancia;
+                if (s != null) s.actualizarFlotante();
+                else if (nuevo) avisoAccesibilidad();
+                actualizar();
+            }
+        });
+        pant.addView(nota("Al tocarlo, la pantalla se pone negra con brillo mínimo y el táctil se bloquea, pero la app sigue sonando. Para volver: botón de encendido (o 5 toques rápidos). Arrástralo para moverlo."));
+        pant.addView(casilla("Usar bloqueo real (apaga de verdad, pero pausa los videos)", "bloqueo_real"));
+        LinearLayout filaBotones = new LinearLayout(this);
+        filaBotones.addView(boton("Probar ahora", AZUL, new Runnable() {
+            @Override
+            public void run() {
                 SaltaService s = SaltaService.instancia;
                 if (s == null) avisoAccesibilidad();
                 else s.accionBloqueo();
             }
+        }));
+        pant.addView(filaBotones);
+        pant.addView(nota("Atajo: baja el panel rápido (donde está la linterna), toca el lápiz ✏️ y agrega \"Pantalla negra\"."));
+        separador(pant);
+
+        TextView tDorm = texto("Temporizador para dormir", 16, BLANCO);
+        tDorm.setTypeface(Typeface.DEFAULT_BOLD);
+        pant.addView(tDorm);
+        textoDormir = nota("");
+        pant.addView(textoDormir);
+        LinearLayout filaDorm = new LinearLayout(this);
+        int[] mins = {15, 30, 60};
+        for (final int m : mins) {
+            filaDorm.addView(boton(m + " min", AZUL, new Runnable() {
+                @Override
+                public void run() {
+                    sp.edit().putLong("dormir_fin", System.currentTimeMillis() + m * 60000L).apply();
+                    if (SaltaService.instancia == null) avisoAccesibilidad();
+                    actualizar();
+                }
+            }));
+        }
+        filaDorm.addView(boton("Cancelar", GRIS, new Runnable() {
+            @Override
+            public void run() {
+                sp.edit().putLong("dormir_fin", 0).apply();
+                actualizar();
+            }
+        }));
+        pant.addView(filaDorm);
+        pant.addView(nota("Al terminar: apaga cámara, voz y auto-scroll, y bloquea el celular."));
+
+        // ---------- Bienestar ----------
+        LinearLayout bien = tarjeta(caja);
+        bien.addView(subtitulo("💚  Bienestar"));
+        fDescanso = fila(bien, "Recordatorio de descanso", "Te avisa cuando llevas mucho tiempo en TikTok.", new Runnable() {
+            @Override
+            public void run() {
+                sp.edit().putBoolean("descanso_on", !sp.getBoolean("descanso_on", false)).apply();
+                actualizar();
+            }
         });
-        caja.addView(probar);
+        textoDescanso = nota("");
+        bien.addView(textoDescanso);
+        bien.addView(barra("descanso_min", 30, 120, new Runnable() {
+            @Override
+            public void run() {
+                if (sp.getInt("descanso_min", 30) < 5) sp.edit().putInt("descanso_min", 5).apply();
+            }
+        }));
+
+        TextView pie = texto("Hecho por CHlVOMAN · v2.0", 12, GRIS);
+        pie.setGravity(Gravity.CENTER);
+        espacio(caja, 8);
+        caja.addView(pie);
 
         ScrollView sv = new ScrollView(this);
+        sv.setBackgroundColor(FONDO);
         sv.addView(caja);
         setContentView(sv);
     }
 
-    // ---------- piezas de la interfaz ----------
+    // ======================= piezas de la interfaz =======================
+
+    private int dp(float v) {
+        return (int) (v * d);
+    }
 
     private TextView texto(String t, int tam, int color) {
         TextView tv = new TextView(this);
@@ -155,9 +271,91 @@ public class MainActivity extends Activity {
         return tv;
     }
 
+    private TextView nota(String t) {
+        TextView tv = texto(t, 13, GRIS);
+        tv.setPadding(0, dp(4), 0, dp(4));
+        tv.setLineSpacing(0, 1.15f);
+        return tv;
+    }
+
+    private TextView subtitulo(String t) {
+        TextView tv = texto(t, 15, AZUL);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setPadding(0, 0, 0, dp(6));
+        return tv;
+    }
+
+    private void espacio(LinearLayout p, int alto) {
+        p.addView(new View(this), new LinearLayout.LayoutParams(1, dp(alto)));
+    }
+
+    private void separador(LinearLayout p) {
+        View v = new View(this);
+        v.setBackgroundColor(BORDE);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
+        lp.topMargin = dp(10);
+        lp.bottomMargin = dp(4);
+        p.addView(v, lp);
+    }
+
+    private GradientDrawable redondo(int color, int radio, int borde) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(radio));
+        if (borde != 0) g.setStroke(dp(1), borde);
+        return g;
+    }
+
+    private LinearLayout tarjeta(LinearLayout padre) {
+        LinearLayout t = new LinearLayout(this);
+        t.setOrientation(LinearLayout.VERTICAL);
+        t.setPadding(dp(16), dp(14), dp(16), dp(14));
+        t.setBackground(redondo(TARJETA, 18, BORDE));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = dp(12);
+        padre.addView(t, lp);
+        return t;
+    }
+
+    private TextView boton(String t, int color, final Runnable accion) {
+        TextView b = texto(t, 14, color == GRIS ? BLANCO : Color.BLACK);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(dp(14), dp(9), dp(14), dp(9));
+        b.setBackground(redondo(color == GRIS ? BORDE : color, 20, 0));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = dp(8);
+        lp.topMargin = dp(6);
+        b.setLayoutParams(lp);
+        b.setClickable(true);
+        b.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                accion.run();
+            }
+        });
+        return b;
+    }
+
+    private TextView stat(LinearLayout fila, String etiqueta) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(4), dp(6), dp(4), dp(6));
+        TextView num = texto("0", 24, BLANCO);
+        num.setTypeface(Typeface.DEFAULT_BOLD);
+        c.addView(num);
+        c.addView(texto(etiqueta, 12, GRIS));
+        fila.addView(c, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        return num;
+    }
+
     private CheckBox casilla(String t, final String clave) {
         CheckBox c = new CheckBox(this);
         c.setText(t);
+        c.setTextColor(BLANCO);
+        c.setTextSize(14);
         c.setChecked(sp.getBoolean(clave, false));
         c.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
@@ -168,26 +366,48 @@ public class MainActivity extends Activity {
         return c;
     }
 
-    private Fila fila(LinearLayout padre, String titulo, final Runnable accion) {
+    private SeekBar barra(final String clave, int def, int max, final Runnable despues) {
+        SeekBar s = new SeekBar(this);
+        s.setMax(max);
+        s.setProgress(sp.getInt(clave, def));
+        s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar sb, int p, boolean user) {
+                sp.edit().putInt(clave, p).apply();
+                if (despues != null) despues.run();
+                actualizar();
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar sb) { }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar sb) { }
+        });
+        return s;
+    }
+
+    private Fila fila(LinearLayout padre, String titulo, String desc, final Runnable accion) {
         Fila f = new Fila();
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, (int) (14 * d), 0, (int) (6 * d));
-
-        f.circulo = new View(this);
-        int tam = (int) (34 * d);
-        LinearLayout.LayoutParams lc = new LinearLayout.LayoutParams(tam, tam);
-        lc.rightMargin = (int) (14 * d);
-        row.addView(f.circulo, lc);
+        row.setPadding(0, dp(8), 0, dp(4));
 
         LinearLayout textos = new LinearLayout(this);
         textos.setOrientation(LinearLayout.VERTICAL);
-        f.titulo = texto(titulo, 17, Color.BLACK);
-        f.detalle = texto("", 13, GRIS);
-        textos.addView(f.titulo);
+        TextView t = texto(titulo, 16, BLANCO);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        textos.addView(t);
+        textos.addView(texto(desc, 13, GRIS));
+        f.detalle = texto("", 12, GRIS);
         textos.addView(f.detalle);
         row.addView(textos, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        f.circulo = new View(this);
+        LinearLayout.LayoutParams lc = new LinearLayout.LayoutParams(dp(32), dp(32));
+        lc.leftMargin = dp(12);
+        row.addView(f.circulo, lc);
 
         row.setClickable(true);
         row.setOnClickListener(new View.OnClickListener() {
@@ -200,29 +420,20 @@ public class MainActivity extends Activity {
         return f;
     }
 
-    private void pintar(Fila f, boolean on, String detalle) {
+    private void pintar(Fila f, boolean on) {
         GradientDrawable g = new GradientDrawable();
         g.setShape(GradientDrawable.OVAL);
-        g.setStroke((int) (3 * d), on ? VERDE : GRIS);
+        g.setStroke(dp(3), on ? VERDE : GRIS);
         g.setColor(on ? VERDE : Color.TRANSPARENT);
         f.circulo.setBackground(g);
-        f.detalle.setText((on ? "Activado" : "Desactivado") + (detalle.isEmpty() ? "" : " · " + detalle));
+        f.detalle.setText(on ? "● Activado" : "○ Desactivado");
         f.detalle.setTextColor(on ? VERDE : GRIS);
     }
 
-    // ---------- acciones ----------
+    // ======================= acciones =======================
 
     private void avisoAccesibilidad() {
-        Toast.makeText(this, "Primero activa el permiso de accesibilidad", Toast.LENGTH_LONG).show();
-    }
-
-    private void alternarBloqueo() {
-        boolean nuevo = !sp.getBoolean("flotante_on", false);
-        sp.edit().putBoolean("flotante_on", nuevo).apply();
-        SaltaService s = SaltaService.instancia;
-        if (s != null) s.actualizarFlotante();
-        else if (nuevo) avisoAccesibilidad();
-        actualizar();
+        Toast.makeText(this, "Primero activa el permiso de accesibilidad (arriba)", Toast.LENGTH_LONG).show();
     }
 
     private void alternarCamara() {
@@ -235,12 +446,7 @@ public class MainActivity extends Activity {
         if (SaltaService.instancia == null) avisoAccesibilidad();
         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.CAMERA)
                 != PackageManager.PERMISSION_GRANTED) {
-            if (Build.VERSION.SDK_INT >= 33) {
-                requestPermissions(new String[]{Manifest.permission.CAMERA,
-                        Manifest.permission.POST_NOTIFICATIONS}, 1);
-            } else {
-                requestPermissions(new String[]{Manifest.permission.CAMERA}, 1);
-            }
+            pedir(Manifest.permission.CAMERA, 1);
             return;
         }
         iniciarServicio(CamaraService.class);
@@ -256,27 +462,24 @@ public class MainActivity extends Activity {
         if (SaltaService.instancia == null) avisoAccesibilidad();
         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
-            if (Build.VERSION.SDK_INT >= 33) {
-                requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO,
-                        Manifest.permission.POST_NOTIFICATIONS}, 2);
-            } else {
-                requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 2);
-            }
+            pedir(Manifest.permission.RECORD_AUDIO, 2);
             return;
         }
         iniciarServicio(VozService.class);
+    }
+
+    private void pedir(String permiso, int codigo) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            requestPermissions(new String[]{permiso, Manifest.permission.POST_NOTIFICATIONS}, codigo);
+        } else {
+            requestPermissions(new String[]{permiso}, codigo);
+        }
     }
 
     private void iniciarServicio(Class<?> clase) {
         Intent i = new Intent(this, clase);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
         else startService(i);
-        estadoAcc.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                actualizar();
-            }
-        }, 700);
     }
 
     @Override
@@ -302,19 +505,50 @@ public class MainActivity extends Activity {
         super.onResume();
         SaltaService s = SaltaService.instancia;
         if (s != null) s.actualizarFlotante();
-        actualizar();
+        h.removeCallbacks(refresco);
+        h.post(refresco);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        h.removeCallbacks(refresco);
     }
 
     private void actualizar() {
+        if (estadoAcc == null) return;
         boolean acc = servicioActivo();
-        estadoAcc.setText(acc ? "✅ Activado" : "❌ Desactivado: toca el botón y actívalo");
-        estadoAcc.setTextColor(acc ? VERDE : Color.rgb(176, 0, 32));
+        estadoAcc.setText(acc ? "✅ Activado, todo listo" : "❌ Desactivado: sin esto nada funciona");
+        estadoAcc.setTextColor(acc ? VERDE : ROJO);
+        botonAcc.setVisibility(acc ? View.GONE : View.VISIBLE);
+        tarjetaAcc.setBackground(redondo(TARJETA, 18, acc ? BORDE : ROJO));
 
-        pintar(filaAnuncios, sp.getBoolean("anuncios_on", true),
-                "omitidos: " + sp.getInt("omitidos", 0));
-        pintar(filaCamara, CamaraService.corriendo, "gestos: " + sp.getInt("gestos", 0));
-        pintar(filaVoz, VozService.corriendo, "órdenes: " + sp.getInt("voz", 0));
-        pintar(filaBloqueo, sp.getBoolean("flotante_on", false), "");
+        statAnuncios.setText(String.valueOf(sp.getInt("omitidos", 0)));
+        statGestos.setText(String.valueOf(sp.getInt("gestos", 0)));
+        statVoz.setText(String.valueOf(sp.getInt("voz", 0)));
+        int seg = SaltaService.instancia != null ? SaltaService.segundosHoy() : 0;
+        statTiempo.setText(seg >= 3600 ? (seg / 3600) + " h " + (seg % 3600 / 60) + " min" : (seg / 60) + " min");
+
+        pintar(fAnuncios, sp.getBoolean("anuncios_on", true));
+        pintar(fCamara, CamaraService.corriendo);
+        pintar(fVoz, VozService.corriendo);
+        pintar(fAuto, sp.getBoolean("auto_on", false));
+        pintar(fFlotante, sp.getBoolean("flotante_on", false));
+        pintar(fDescanso, sp.getBoolean("descanso_on", false));
+
+        textoAuto.setText("Cada " + Math.max(3, sp.getInt("auto_seg", 15)) + " segundos");
+        textoDescanso.setText("Avisar cada " + Math.max(5, sp.getInt("descanso_min", 30)) + " minutos de TikTok");
+
+        long fin = sp.getLong("dormir_fin", 0);
+        long resta = fin - System.currentTimeMillis();
+        if (fin > 0 && resta > 0) {
+            long m = resta / 60000, s = (resta / 1000) % 60;
+            textoDormir.setText("⏳ Se apaga en " + m + ":" + (s < 10 ? "0" : "") + s);
+            textoDormir.setTextColor(VERDE);
+        } else {
+            textoDormir.setText("Elige en cuánto tiempo quieres que se apague todo.");
+            textoDormir.setTextColor(GRIS);
+        }
     }
 
     private boolean servicioActivo() {

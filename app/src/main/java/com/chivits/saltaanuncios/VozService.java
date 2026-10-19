@@ -66,7 +66,7 @@ public class VozService extends Service {
             nb = new Notification.Builder(this);
         }
         Notification noti = nb.setContentTitle("Control por voz activo")
-                .setContentText("Di \"uno\" o \"dos\" para mover el scroll")
+                .setContentText("Di uno, dos, me gusta, pausa o apagar")
                 .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                 .setOngoing(true)
                 .build();
@@ -179,11 +179,7 @@ public class VozService extends Service {
         ArrayList<String> lista = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
         if (lista == null) return;
         for (String s : lista) {
-            if (s == null) continue;
-            String t = s.trim().toLowerCase(Locale.ROOT).replace(".", "").replace(",", "");
-            int orden = 0;
-            if (t.equals("1") || t.equals("uno") || t.equals("un")) orden = 1;
-            else if (t.equals("2") || t.equals("dos")) orden = 2;
+            int orden = entender(s);
             if (orden != 0) {
                 disparado = true;
                 ejecutar(orden);
@@ -193,14 +189,50 @@ public class VozService extends Service {
         }
     }
 
+    /** 1 = siguiente, 2 = anterior, 3 = me gusta, 4 = pausa, 5 = apagar pantalla. */
+    static int entender(String s) {
+        if (s == null) return 0;
+        String t = s.trim().toLowerCase(Locale.ROOT).replace(".", "").replace(",", "")
+                .replace("!", "").replace("¡", "").replace("á", "a").replace("ó", "o");
+        switch (t) {
+            case "1": case "uno": case "un": case "siguiente":
+                return 1;
+            case "2": case "dos": case "anterior": case "atras":
+                return 2;
+            case "me gusta": case "megusta": case "like": case "corazon":
+                return 3;
+            case "pausa": case "pausar": case "play": case "continuar": case "sigue":
+                return 4;
+            case "apagar": case "apaga": case "apagar pantalla": case "pantalla negra": case "dormir":
+                return 5;
+            default:
+                return 0;
+        }
+    }
+
     private void ejecutar(int orden) {
         SaltaService srv = SaltaService.instancia;
         if (srv == null) return;
         SharedPreferences sp = getSharedPreferences("stats", Context.MODE_PRIVATE);
-        boolean invertir = sp.getBoolean("invertir_voz", false);
-        // por defecto: 1 = siguiente video (deslizar hacia arriba), 2 = video anterior
-        boolean haciaArriba = orden == 1;
-        srv.deslizar(invertir ? !haciaArriba : haciaArriba);
+        switch (orden) {
+            case 1:
+            case 2:
+                boolean haciaArriba = orden == 1;
+                if (sp.getBoolean("invertir_voz", false)) haciaArriba = !haciaArriba;
+                srv.deslizar(haciaArriba);
+                break;
+            case 3:
+                srv.meGusta();
+                break;
+            case 4:
+                srv.pausar();
+                break;
+            case 5:
+                srv.pantallaNegra();
+                break;
+            default:
+                return;
+        }
         sp.edit().putInt("voz", sp.getInt("voz", 0) + 1).apply();
     }
 

@@ -2,34 +2,50 @@ package com.chivits.saltaanuncios;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.BroadcastReceiver;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.graphics.Path;
 import android.graphics.PixelFormat;
-import android.os.PowerManager;
-import android.util.DisplayMetrics;
+import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.PowerManager;
+import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
-import android.widget.TextView;
-import android.widget.Toast;
-import android.content.SharedPreferences;
-import android.graphics.Path;
-import android.graphics.Rect;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.widget.TextView;
+import android.widget.Toast;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-/** Servicio de accesibilidad: solo actúa dentro de la app de YouTube y solo pulsa "Omitir anuncio". */
+/**
+ * Servicio de accesibilidad principal.
+ * - En YouTube: pulsa "Omitir anuncio".
+ * - En TikTok: desliza, da "me gusta", pausa (pedido por la cámara, la voz o el auto-scroll).
+ * - En cualquier app: botón flotante y "pantalla negra" (apaga la pantalla sin parar la app).
+ * - Cuenta el tiempo en TikTok, recordatorio de descanso y temporizador para dormir.
+ */
 public class SaltaService extends AccessibilityService {
 
+    static volatile SaltaService instancia;
+
+    private static final String YOUTUBE = "com.google.android.youtube";
+    private static final String[] TIKTOK = {
+            "com.zhiliaoapp.musically", "com.zhiliaoapp.musically.go", "com.ss.android.ugc.trill"
+    };
     private static final String[] IDS = {
             "com.google.android.youtube:id/skip_ad_button",
             "com.google.android.youtube:id/skip_ad_button_container"
@@ -40,94 +56,68 @@ public class SaltaService extends AccessibilityService {
     };
     private static final String[] EMPIEZA_CON = {"omitir", "saltar", "skip"};
 
-    static volatile SaltaService instancia;
+    private final Handler h = new Handler(Looper.getMainLooper());
+    private SharedPreferences prefs;
     private long ultimo = 0;
 
-    private static final String YOUTUBE = "com.google.android.youtube";
-    private static final String[] TIKTOK = {
-            "com.zhiliaoapp.musically", "com.zhiliaoapp.musically.go", "com.ss.android.ugc.trill"
-    };
-    private SharedPreferences prefs;
-    private View flotante;
-    private View negra;
-    private BroadcastReceiver receptorApagado;
-    private long[] toques = new long[5];
-    private int nToques = 0;
+    // TikTok al frente
     private long ultimaComprobacion = 0;
     private boolean cacheTikTok = false;
 
-    /** true si la app que está al frente ahora es TikTok (se consulta como máximo cada 0,6 s). */
-    static boolean enTikTok() {
-        SaltaService s = instancia;
-        return s != null && s.comprobarTikTok(false);
-    }
+    // flotante y pantalla negra
+    private View flotante;
+    private View negra;
+    private WindowManager.LayoutParams negraLp;
+    private BroadcastReceiver receptorApagado;
+    private final long[] toques = new long[5];
+    private int nToques = 0;
 
-    private boolean comprobarTikTok(boolean forzar) {
-        long t = System.currentTimeMillis();
-        if (!forzar && t - ultimaComprobacion < 600) return cacheTikTok;
-        ultimaComprobacion = t;
-        boolean v = false;
-        try {
-            AccessibilityNodeInfo r = getRootInActiveWindow();
-            if (r != null && r.getPackageName() != null) {
-                String pkg = r.getPackageName().toString();
-                for (String k : TIKTOK) {
-                    if (k.equals(pkg)) v = true;
-                }
-            }
-        } catch (RuntimeException e) {
-            v = false;
-        }
-        cacheTikTok = v;
-        return v;
-    }
+    // reloj interno (cada segundo)
+    private int segAuto = 0, segDescanso = 0, segSinGuardar = 0;
+    private int usoHoy = 0;
+    private String diaUso = "";
+
+    // ======================= ciclo de vida =======================
 
     @Override
     protected void onServiceConnected() {
         instancia = this;
         prefs = getSharedPreferences("stats", Context.MODE_PRIVATE);
+        diaUso = hoy();
+        usoHoy = prefs.getString("uso_dia", "").equals(diaUso) ? prefs.getInt("uso_seg", 0) : 0;
         actualizarFlotante();
+        h.removeCallbacks(reloj);
+        h.postDelayed(reloj, 1000);
     }
 
     @Override
     public boolean onUnbind(Intent intent) {
+        guardarUso();
+        h.removeCallbacksAndMessages(null);
         quitarPantallaNegra();
         quitarFlotante();
         instancia = null;
         return super.onUnbind(intent);
     }
 
-    /** Desliza la pantalla: arriba = pasa al siguiente video; abajo = vuelve al anterior. */
-    public void deslizar(boolean haciaArriba) {
-        if (!comprobarTikTok(true)) return; // solo se desliza dentro de TikTok
-        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-        float x = dm.widthPixels / 2f;
-        float desde = dm.heightPixels * (haciaArriba ? 0.75f : 0.25f);
-        float hasta = dm.heightPixels * (haciaArriba ? 0.25f : 0.75f);
-        Path camino = new Path();
-        camino.moveTo(x, desde);
-        camino.lineTo(x, hasta);
-        GestureDescription gesto = new GestureDescription.Builder()
-                .addStroke(new GestureDescription.StrokeDescription(camino, 0, 250))
-                .build();
-        dispatchGesture(gesto, null, null);
-    }
+    @Override
+    public void onInterrupt() { }
+
+    // ======================= YouTube: saltar anuncios =======================
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent evento) {
-        // El salta-anuncios solo actúa dentro de YouTube
         if (evento.getPackageName() == null || !YOUTUBE.equals(evento.getPackageName().toString())) return;
-        if (prefs != null && !prefs.getBoolean("anuncios_on", true)) return; // función apagada
+        if (prefs != null && !prefs.getBoolean("anuncios_on", true)) return;
+
         long ahora = System.currentTimeMillis();
         if (ahora - ultimo < 400) return;
-
         AccessibilityNodeInfo raiz = getRootInActiveWindow();
         if (raiz == null) return;
-
         AccessibilityNodeInfo boton = buscarBoton(raiz);
         if (boton != null && pulsar(boton)) {
-            ultimo = ahora + 1000; // espera un poco para no pulsar dos veces
-            sumarContador();
+            ultimo = ahora + 1000;
+            sumar("omitidos");
         }
     }
 
@@ -159,31 +149,210 @@ public class SaltaService extends AccessibilityService {
     private boolean pulsar(AccessibilityNodeInfo nodo) {
         AccessibilityNodeInfo x = nodo;
         for (int i = 0; i < 5 && x != null; i++) {
-            if (x.isClickable() && x.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                return true;
-            }
+            if (x.isClickable() && x.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
             x = x.getParent();
         }
-        // Plan B: tocar el centro del botón
         Rect r = new Rect();
         nodo.getBoundsInScreen(r);
         if (r.isEmpty()) return false;
+        tocar(r.centerX(), r.centerY(), false);
+        return true;
+    }
+
+    // ======================= TikTok =======================
+
+    /** true si la app que está al frente es TikTok (se consulta como máximo cada 0,6 s). */
+    static boolean enTikTok() {
+        SaltaService s = instancia;
+        return s != null && s.comprobarTikTok(false);
+    }
+
+    private boolean comprobarTikTok(boolean forzar) {
+        long t = System.currentTimeMillis();
+        if (!forzar && t - ultimaComprobacion < 600) return cacheTikTok;
+        ultimaComprobacion = t;
+        boolean v = false;
+        try {
+            AccessibilityNodeInfo r = getRootInActiveWindow();
+            if (r != null && r.getPackageName() != null) {
+                String pkg = r.getPackageName().toString();
+                for (String k : TIKTOK) {
+                    if (k.equals(pkg)) v = true;
+                }
+            }
+        } catch (RuntimeException e) {
+            v = false;
+        }
+        cacheTikTok = v;
+        return v;
+    }
+
+    /** Desliza: arriba = siguiente video; abajo = anterior. Solo dentro de TikTok. */
+    public void deslizar(boolean haciaArriba) {
+        if (!comprobarTikTok(true)) return;
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        float x = dm.widthPixels / 2f;
         Path camino = new Path();
-        camino.moveTo(r.centerX(), r.centerY());
-        GestureDescription gesto = new GestureDescription.Builder()
-                .addStroke(new GestureDescription.StrokeDescription(camino, 0, 60))
-                .build();
-        return dispatchGesture(gesto, null, null);
+        camino.moveTo(x, dm.heightPixels * (haciaArriba ? 0.75f : 0.25f));
+        camino.lineTo(x, dm.heightPixels * (haciaArriba ? 0.25f : 0.75f));
+        enviarGesto(new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(camino, 0, 250)).build());
+        segAuto = 0; // reinicia la cuenta del auto-scroll
     }
 
-    private void sumarContador() {
-        SharedPreferences sp = getSharedPreferences("stats", Context.MODE_PRIVATE);
-        sp.edit().putInt("omitidos", sp.getInt("omitidos", 0) + 1).apply();
+    /** Doble toque en el centro = "me gusta" en TikTok. */
+    public void meGusta() {
+        if (!comprobarTikTok(true)) return;
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        float x = dm.widthPixels / 2f, y = dm.heightPixels * 0.45f;
+        Path p1 = new Path();
+        p1.moveTo(x, y);
+        Path p2 = new Path();
+        p2.moveTo(x, y);
+        enviarGesto(new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(p1, 0, 40))
+                .addStroke(new GestureDescription.StrokeDescription(p2, 140, 40)).build());
     }
 
-    // ---------------- Botón flotante para bloquear la pantalla ----------------
+    /** Un toque en el centro = pausar / continuar en TikTok. */
+    public void pausar() {
+        if (!comprobarTikTok(true)) return;
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        tocar(dm.widthPixels / 2f, dm.heightPixels * 0.45f, true);
+    }
 
-    /** Muestra u oculta el botón flotante según el ajuste "flotante_on". */
+    private void tocar(float x, float y, boolean soloSiNegra) {
+        Path p = new Path();
+        p.moveTo(x, y);
+        enviarGesto(new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(p, 0, 50)).build());
+    }
+
+    /**
+     * Envía un gesto. Si la pantalla negra está puesta, la vuelve "transparente al tacto"
+     * mientras dura el gesto, para que llegue a la app de abajo.
+     */
+    private void enviarGesto(GestureDescription g) {
+        final boolean conNegra = negra != null && negraLp != null;
+        if (conNegra) tactilNegra(false);
+        GestureResultCallback fin = new GestureResultCallback() {
+            @Override
+            public void onCompleted(GestureDescription d) {
+                if (conNegra) h.postDelayed(restaurarNegra, 150);
+            }
+
+            @Override
+            public void onCancelled(GestureDescription d) {
+                if (conNegra) h.postDelayed(restaurarNegra, 150);
+            }
+        };
+        boolean ok = dispatchGesture(g, fin, null);
+        if (conNegra) {
+            if (!ok) restaurarNegra.run();
+            else h.postDelayed(restaurarNegra, 1500); // por si acaso
+        }
+    }
+
+    private final Runnable restaurarNegra = new Runnable() {
+        @Override
+        public void run() {
+            tactilNegra(true);
+        }
+    };
+
+    private void tactilNegra(boolean bloquear) {
+        if (negra == null || negraLp == null) return;
+        if (bloquear) negraLp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        else negraLp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        try {
+            ((WindowManager) getSystemService(Context.WINDOW_SERVICE)).updateViewLayout(negra, negraLp);
+        } catch (RuntimeException e) {
+            // nada
+        }
+    }
+
+    // ======================= reloj: uso, auto-scroll, descanso, dormir =======================
+
+    private final Runnable reloj = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                cadaSegundo();
+            } catch (RuntimeException e) {
+                // nunca debe tumbar el servicio
+            }
+            h.postDelayed(this, 1000);
+        }
+    };
+
+    private void cadaSegundo() {
+        if (prefs == null) return;
+        boolean tk = comprobarTikTok(false);
+
+        // tiempo en TikTok hoy
+        String d = hoy();
+        if (!d.equals(diaUso)) {
+            diaUso = d;
+            usoHoy = 0;
+        }
+        if (tk) {
+            usoHoy++;
+            if (++segSinGuardar >= 10) guardarUso();
+        }
+
+        // auto-scroll
+        if (tk && prefs.getBoolean("auto_on", false)) {
+            int cada = Math.max(3, prefs.getInt("auto_seg", 15));
+            if (++segAuto >= cada) deslizar(true);
+        } else {
+            segAuto = 0;
+        }
+
+        // recordatorio de descanso
+        if (tk && prefs.getBoolean("descanso_on", false)) {
+            int min = Math.max(1, prefs.getInt("descanso_min", 30));
+            if (++segDescanso >= min * 60) {
+                segDescanso = 0;
+                Toast.makeText(this, "⏰ Llevas " + min + " minutos en TikTok. ¡Descansa un ratito!",
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+
+        // temporizador para dormir
+        long fin = prefs.getLong("dormir_fin", 0);
+        if (fin > 0 && System.currentTimeMillis() >= fin) {
+            prefs.edit().putLong("dormir_fin", 0).apply();
+            stopService(new Intent(this, CamaraService.class));
+            stopService(new Intent(this, VozService.class));
+            CamaraService.corriendo = false;
+            VozService.corriendo = false;
+            prefs.edit().putBoolean("auto_on", false).apply();
+            quitarPantallaNegra();
+            if (Build.VERSION.SDK_INT >= 28) performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN);
+            else performGlobalAction(GLOBAL_ACTION_HOME);
+        }
+    }
+
+    private void guardarUso() {
+        segSinGuardar = 0;
+        if (prefs != null) prefs.edit().putString("uso_dia", diaUso).putInt("uso_seg", usoHoy).apply();
+    }
+
+    static int segundosHoy() {
+        SaltaService s = instancia;
+        return s != null ? s.usoHoy : 0;
+    }
+
+    private static String hoy() {
+        return new SimpleDateFormat("yyyyMMdd", Locale.ROOT).format(new Date());
+    }
+
+    private void sumar(String clave) {
+        if (prefs != null) prefs.edit().putInt(clave, prefs.getInt(clave, 0) + 1).apply();
+    }
+
+    // ======================= botón flotante =======================
+
     public void actualizarFlotante() {
         boolean on = prefs != null && prefs.getBoolean("flotante_on", false);
         if (on && flotante == null) ponerFlotante();
@@ -196,13 +365,13 @@ public class SaltaService extends AccessibilityService {
         int tam = (int) (52 * d);
 
         TextView boton = new TextView(this);
-        boton.setText("\uD83D\uDD12"); // candado
+        boton.setText("🌙"); // luna
         boton.setTextSize(22);
         boton.setGravity(Gravity.CENTER);
         GradientDrawable fondo = new GradientDrawable();
         fondo.setShape(GradientDrawable.OVAL);
-        fondo.setColor(0xAA000000);
-        fondo.setStroke((int) (2 * d), 0xFF2E7D32);
+        fondo.setColor(0xCC15171C);
+        fondo.setStroke((int) (2 * d), 0xFF34C759);
         boton.setBackground(fondo);
 
         final WindowManager.LayoutParams lp = new WindowManager.LayoutParams(tam, tam,
@@ -243,11 +412,8 @@ public class SaltaService extends AccessibilityService {
                         }
                         return true;
                     case MotionEvent.ACTION_UP:
-                        if (movido) {
-                            prefs.edit().putInt("flotante_x", lp.x).putInt("flotante_y", lp.y).apply();
-                        } else {
-                            accionBloqueo();
-                        }
+                        if (movido) prefs.edit().putInt("flotante_x", lp.x).putInt("flotante_y", lp.y).apply();
+                        else accionBloqueo();
                         return true;
                     default:
                         return false;
@@ -273,16 +439,34 @@ public class SaltaService extends AccessibilityService {
         flotante = null;
     }
 
-    /** Lo que hace el botón de bloqueo: pantalla negra (por defecto) o bloqueo real del sistema. */
+    // ======================= pantalla negra / bloqueo =======================
+
+    /** Botón de bloqueo: pantalla negra (por defecto) o bloqueo real del sistema. */
     public void accionBloqueo() {
         if (prefs != null && prefs.getBoolean("bloqueo_real", false)) bloquearPantalla();
         else pantallaNegra();
     }
 
+    /** Desde el panel rápido: primero cierra el panel y luego apaga. */
+    public void accionDesdePanel() {
+        if (Build.VERSION.SDK_INT >= 31) performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE);
+        else performGlobalAction(GLOBAL_ACTION_BACK);
+        h.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                accionBloqueo();
+            }
+        }, 600);
+    }
+
+    static boolean negraActiva() {
+        SaltaService s = instancia;
+        return s != null && s.negra != null;
+    }
+
     /**
-     * "Apaga" la pantalla sin bloquear el celular: la cubre de negro, baja el brillo al mínimo
-     * y bloquea el táctil. La app de abajo (TikTok, YouTube...) sigue funcionando y sonando.
-     * Para volver: botón de encendido (o tocar 5 veces rápido como salida de emergencia).
+     * Cubre la pantalla de negro, con brillo mínimo y táctil bloqueado. La app de abajo sigue
+     * funcionando. Para volver: botón de encendido, o 5 toques rápidos.
      */
     public void pantallaNegra() {
         if (negra != null) return;
@@ -297,7 +481,7 @@ public class SaltaService extends AccessibilityService {
             @Override
             public boolean onTouch(View vista, MotionEvent e) {
                 if (e.getAction() == MotionEvent.ACTION_DOWN) contarToqueEmergencia();
-                return true; // se come todos los toques
+                return true;
             }
         });
 
@@ -312,19 +496,20 @@ public class SaltaService extends AccessibilityService {
         lp.gravity = Gravity.TOP | Gravity.START;
         lp.x = -200;
         lp.y = -200;
-        lp.screenBrightness = 0f; // brillo al mínimo
+        lp.screenBrightness = 0f;
         if (Build.VERSION.SDK_INT >= 28) {
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         }
         try {
             wm.addView(v, lp);
             negra = v;
+            negraLp = lp;
         } catch (RuntimeException e) {
             negra = null;
+            negraLp = null;
             return;
         }
 
-        // Al apretar el botón de encendido: quitar lo negro y volver a prender la pantalla
         receptorApagado = new BroadcastReceiver() {
             @Override
             public void onReceive(Context c, Intent i) {
@@ -341,13 +526,11 @@ public class SaltaService extends AccessibilityService {
         long t = System.currentTimeMillis();
         toques[nToques % toques.length] = t;
         nToques++;
-        if (nToques >= toques.length) {
-            long masViejo = toques[nToques % toques.length];
-            if (t - masViejo < 2000) quitarPantallaNegra(); // 5 toques en menos de 2 s
-        }
+        if (nToques >= toques.length && t - toques[nToques % toques.length] < 2000) quitarPantallaNegra();
     }
 
     public void quitarPantallaNegra() {
+        h.removeCallbacks(restaurarNegra);
         if (receptorApagado != null) {
             try {
                 unregisterReceiver(receptorApagado);
@@ -364,6 +547,7 @@ public class SaltaService extends AccessibilityService {
             // nada
         }
         negra = null;
+        negraLp = null;
     }
 
     @SuppressWarnings("deprecation")
@@ -374,19 +558,16 @@ public class SaltaService extends AccessibilityService {
                     | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE, "saltaanuncios:despertar");
             wl.acquire(2000);
         } catch (RuntimeException e) {
-            // si el celular no deja, basta con apretar otra vez el botón de encendido
+            // basta con apretar otra vez el botón de encendido
         }
     }
 
-    /** Bloquea y apaga la pantalla de verdad (necesita Android 9 o superior). */
+    /** Bloquea y apaga la pantalla de verdad (Android 9 o superior). */
     public void bloquearPantalla() {
         if (Build.VERSION.SDK_INT >= 28) {
-            performGlobalAction(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN);
+            performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN);
         } else {
-            Toast.makeText(this, "Bloquear pantalla necesita Android 9 o superior", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "El bloqueo real necesita Android 9 o superior", Toast.LENGTH_LONG).show();
         }
     }
-
-    @Override
-    public void onInterrupt() { }
 }
