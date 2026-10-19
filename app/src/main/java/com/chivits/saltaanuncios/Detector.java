@@ -37,6 +37,13 @@ public class Detector {
             previo = g.clone();
             return 0;
         }
+        // Brillo promedio: con poca luz las diferencias son más pequeñas,
+        // así que el umbral baja (mínimo 8) para seguir viendo la mano.
+        long suma = 0;
+        for (int i = 0; i < g.length; i++) suma += (g[i] & 0xFF);
+        int media = (int) (suma / g.length);
+        int dif = Math.max(8, Math.min(DIF, Math.round(media * 0.35f)));
+
         int mov = 0;
         float sx = 0, sy = 0;
         for (int y = 0; y < GH; y++) {
@@ -44,7 +51,7 @@ public class Detector {
                 int i = y * GW + x;
                 int d = (g[i] & 0xFF) - (previo[i] & 0xFF);
                 if (d < 0) d = -d;
-                if (d > DIF) {
+                if (d > dif) {
                     mov++;
                     sx += x + 0.5f;
                     sy += y + 0.5f;

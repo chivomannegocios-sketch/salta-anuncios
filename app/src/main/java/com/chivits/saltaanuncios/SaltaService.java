@@ -475,6 +475,8 @@ public class SaltaService extends AccessibilityService {
         wm.getDefaultDisplay().getRealMetrics(real);
         int lado = Math.max(real.widthPixels, real.heightPixels) + 400;
 
+        // La cámara, la voz y el auto-scroll siguen funcionando debajo de lo negro:
+        // sus gestos atraviesan esta capa (ver enviarGesto).
         View v = new View(this);
         v.setBackgroundColor(Color.BLACK);
         v.setOnTouchListener(new View.OnTouchListener() {

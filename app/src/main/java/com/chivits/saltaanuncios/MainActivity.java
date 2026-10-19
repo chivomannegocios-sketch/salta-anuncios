@@ -185,7 +185,12 @@ public class MainActivity extends Activity {
                 actualizar();
             }
         });
-        pant.addView(nota("Al tocarlo, la pantalla se pone negra con brillo mínimo y el táctil se bloquea, pero la app sigue sonando. Para volver: botón de encendido (o 5 toques rápidos). Arrástralo para moverlo."));
+        pant.addView(nota("Al tocarlo, la pantalla se pone negra con brillo mínimo y el táctil se bloquea, pero todo sigue funcionando:\n"
+                + "• el video sigue sonando,\n"
+                + "• el scroll con la cámara sigue activo (mueve la mano igual que siempre),\n"
+                + "• el control por voz sigue escuchando,\n"
+                + "• y el auto-scroll sigue pasando videos.\n"
+                + "Para volver: botón de encendido (o 5 toques rápidos). Arrástralo para moverlo."));
         pant.addView(casilla("Usar bloqueo real (apaga de verdad, pero pausa los videos)", "bloqueo_real"));
         LinearLayout filaBotones = new LinearLayout(this);
         filaBotones.addView(boton("Probar ahora", AZUL, new Runnable() {
@@ -246,7 +251,7 @@ public class MainActivity extends Activity {
             }
         }));
 
-        TextView pie = texto("Hecho por CHlVOMAN · v2.0", 12, GRIS);
+        TextView pie = texto("Hecho por CHlVOMAN · v2.1", 12, GRIS);
         pie.setGravity(Gravity.CENTER);
         espacio(caja, 8);
         caja.addView(pie);
@@ -352,11 +357,15 @@ public class MainActivity extends Activity {
     }
 
     private CheckBox casilla(String t, final String clave) {
+        return casilla(t, clave, false);
+    }
+
+    private CheckBox casilla(String t, final String clave, boolean def) {
         CheckBox c = new CheckBox(this);
         c.setText(t);
         c.setTextColor(BLANCO);
         c.setTextSize(14);
-        c.setChecked(sp.getBoolean(clave, false));
+        c.setChecked(sp.getBoolean(clave, def));
         c.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton b, boolean marcado) {
