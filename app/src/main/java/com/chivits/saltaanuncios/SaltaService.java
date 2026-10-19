@@ -232,9 +232,35 @@ public class SaltaService extends AccessibilityService {
      * Envía un gesto. Si la pantalla negra está puesta, la vuelve "transparente al tacto"
      * mientras dura el gesto, para que llegue a la app de abajo.
      */
-    private void enviarGesto(GestureDescription g) {
+    private void enviarGesto(final GestureDescription g) {
+        // La cámara llama desde su propio hilo; la pantalla negra solo se puede tocar
+        // desde el hilo principal, así que todo el gesto se hace allí.
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            h.post(new Runnable() {
+                @Override
+                public void run() {
+                    enviarGesto(g);
+                }
+            });
+            return;
+        }
         final boolean conNegra = negra != null && negraLp != null;
-        if (conNegra) tactilNegra(false);
+        if (conNegra) {
+            h.removeCallbacks(restaurarNegra);
+            tactilNegra(false);
+            // espera un momento a que la capa negra deje pasar el toque
+            h.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    despachar(g, true);
+                }
+            }, 80);
+        } else {
+            despachar(g, false);
+        }
+    }
+
+    private void despachar(GestureDescription g, final boolean conNegra) {
         GestureResultCallback fin = new GestureResultCallback() {
             @Override
             public void onCompleted(GestureDescription d) {

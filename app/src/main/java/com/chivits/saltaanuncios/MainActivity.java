@@ -251,7 +251,7 @@ public class MainActivity extends Activity {
             }
         }));
 
-        TextView pie = texto("Hecho por CHlVOMAN · v2.1", 12, GRIS);
+        TextView pie = texto("Hecho por CHlVOMAN · v2.2", 12, GRIS);
         pie.setGravity(Gravity.CENTER);
         espacio(caja, 8);
         caja.addView(pie);
